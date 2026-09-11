@@ -280,19 +280,26 @@ func makeNetworkName(nodeID string) string {
 	}
 }
 
+// NetceptorConsts holds operational constants for a Netceptor instance.
+type NetceptorConsts struct {
+	MTU                   int
+	RouteUpdateTime       time.Duration
+	ServiceAdTime         time.Duration
+	SeenUpdateExpireTime  time.Duration
+	MaxForwardingHops     byte
+	MaxConnectionIdleTime time.Duration
+}
+
 // NewWithConsts constructs a new Receptor network protocol instance, specifying operational constants.
-func NewWithConsts(ctx context.Context, nodeID string,
-	mtu int, routeUpdateTime time.Duration, serviceAdTime time.Duration, seenUpdateExpireTime time.Duration,
-	maxForwardingHops byte, maxConnectionIdleTime time.Duration,
-) *Netceptor {
+func NewWithConsts(ctx context.Context, nodeID string, consts NetceptorConsts) *Netceptor {
 	s := Netceptor{
 		nodeID:                   nodeID,
-		mtu:                      mtu,
-		routeUpdateTime:          routeUpdateTime,
-		serviceAdTime:            serviceAdTime,
-		seenUpdateExpireTime:     seenUpdateExpireTime,
-		maxForwardingHops:        maxForwardingHops,
-		maxConnectionIdleTime:    maxConnectionIdleTime,
+		mtu:                      consts.MTU,
+		routeUpdateTime:          consts.RouteUpdateTime,
+		serviceAdTime:            consts.ServiceAdTime,
+		seenUpdateExpireTime:     consts.SeenUpdateExpireTime,
+		maxForwardingHops:        consts.MaxForwardingHops,
+		maxConnectionIdleTime:    consts.MaxConnectionIdleTime,
 		epoch:                    uint64(time.Now().Unix())*(1<<24) + uint64(rand.Intn(1<<24)), //nolint:gosec
 		sequence:                 0,
 		sequenceLock:             &sync.RWMutex{},
@@ -366,8 +373,14 @@ func NewWithConsts(ctx context.Context, nodeID string,
 
 // New constructs a new Receptor network protocol instance.
 func New(ctx context.Context, nodeID string) *Netceptor {
-	return NewWithConsts(ctx, nodeID, defaultMTU, defaultRouteUpdateTime, defaultServiceAdTime,
-		defaultSeenUpdateExpireTime, defaultMaxForwardingHops, defaultMaxConnectionIdleTime)
+	return NewWithConsts(ctx, nodeID, NetceptorConsts{
+		MTU:                   defaultMTU,
+		RouteUpdateTime:       defaultRouteUpdateTime,
+		ServiceAdTime:         defaultServiceAdTime,
+		SeenUpdateExpireTime:  defaultSeenUpdateExpireTime,
+		MaxForwardingHops:     defaultMaxForwardingHops,
+		MaxConnectionIdleTime: defaultMaxConnectionIdleTime,
+	})
 }
 
 // NewAddr generates a Receptor network address from a node ID and service name.

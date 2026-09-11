@@ -60,66 +60,9 @@ func TestHopCountLimit(t *testing.T) {
 		log.SetOutput(os.Stdout)
 	}()
 
-	// Create two Netceptor nodes using external backends
-	n1 := New(context.Background(), "node1")
-	n1.Logger.SetOutput(lw)
-	n1.Logger.SetShowTrace(true)
-	b1, err := NewExternalBackend()
-	if err != nil {
-		t.Fatal(err)
-	}
-	err = n1.AddBackend(b1)
-	if err != nil {
-		t.Fatal(err)
-	}
-	n2 := New(context.Background(), "node2")
-	n2.Logger.SetOutput(lw)
-	n2.Logger.SetShowTrace(true)
-	b2, err := NewExternalBackend()
-	if err != nil {
-		t.Fatal(err)
-	}
-	err = n2.AddBackend(b2)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	// Create a Unix socket pair and use it to connect the backends
-	c1, c2, err := socketpair.New("unix")
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	// Subscribe for node list updates
-	nCh1 := n1.SubscribeRoutingUpdates()
-	nCh2 := n2.SubscribeRoutingUpdates()
-
-	// Connect the two nodes
-	b1.NewConnection(MessageConnFromNetConn(c1), true)
-	b2.NewConnection(MessageConnFromNetConn(c2), true)
-
-	// Wait for the nodes to establish routing to each other
-	var routes1 map[string]string
-	var routes2 map[string]string
-	timeout, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	for {
-		select {
-		case <-timeout.Done():
-			t.Fatal("timed out waiting for nodes to connect")
-		case routes1 = <-nCh1:
-		case routes2 = <-nCh2:
-		}
-		if routes1 != nil && routes2 != nil {
-			_, ok := routes1["node2"]
-			if ok {
-				_, ok := routes2["node1"]
-				if ok {
-					break
-				}
-			}
-		}
-	}
+	net := createTwoNodeNet(t, lw)
+	n1, n2 := net.n1, net.n2
+	connectAndWaitForRouting(t, net)
 
 	// Inject a fake node3 that both nodes think the other node has a route to
 	n1.AddNameHash("node3")
@@ -142,7 +85,7 @@ func TestHopCountLimit(t *testing.T) {
 	}
 
 	// If the hop count limit is not working, the connections will never become inactive
-	timeout, cancel = context.WithTimeout(context.Background(), 2*time.Second)
+	timeout, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	for {
 		c, ok := n1.connections["node2"]
@@ -683,32 +626,11 @@ func TestAllowedPeers(t *testing.T) {
 		log.SetOutput(os.Stdout)
 	}()
 
-	// Create two Netceptor nodes using external backends
-	n1 := New(context.Background(), "node1")
-	n1.Logger.SetOutput(lw)
-	n1.Logger.SetShowTrace(true)
-	b1, err := NewExternalBackend()
-	if err != nil {
-		t.Fatal(err)
-	}
-	err = n1.AddBackend(b1)
-	if err != nil {
-		t.Fatal(err)
-	}
-	n2 := New(context.Background(), "node2")
-	n2.Logger.SetOutput(lw)
-	n2.Logger.SetShowTrace(true)
-	b2, err := NewExternalBackend()
-	if err != nil {
-		t.Fatal(err)
-	}
-	err = n2.AddBackend(b2)
-	if err != nil {
-		t.Fatal(err)
-	}
+	net := createTwoNodeNet(t, lw)
+	n1, n2 := net.n1, net.n2
 
 	// Add a firewall to node 1 that rejects messages whose data is "bad"
-	err = n1.AddFirewallRules([]FirewallRuleFunc{
+	err := n1.AddFirewallRules([]FirewallRuleFunc{
 		func(md *MessageData) FirewallResult {
 			if string(md.Data) == "bad" {
 				return FirewallResultReject
@@ -721,42 +643,7 @@ func TestAllowedPeers(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Create a Unix socket pair and use it to connect the backends
-	c1, c2, err := socketpair.New("unix")
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	// Subscribe for node list updates
-	nCh1 := n1.SubscribeRoutingUpdates()
-	nCh2 := n2.SubscribeRoutingUpdates()
-
-	// Connect the two nodes
-	b1.NewConnection(MessageConnFromNetConn(c1), true)
-	b2.NewConnection(MessageConnFromNetConn(c2), true)
-
-	// Wait for the nodes to establish routing to each other
-	var routes1 map[string]string
-	var routes2 map[string]string
-	timeout, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	for {
-		select {
-		case <-timeout.Done():
-			t.Fatal("timed out waiting for nodes to connect")
-		case routes1 = <-nCh1:
-		case routes2 = <-nCh2:
-		}
-		if routes1 != nil && routes2 != nil {
-			_, ok := routes1["node2"]
-			if ok {
-				_, ok := routes2["node1"]
-				if ok {
-					break
-				}
-			}
-		}
-	}
+	timeout := connectAndWaitForRouting(t, net)
 
 	// Set up packet connection
 	pc1, err := n1.ListenPacket("testsvc")
@@ -1525,4 +1412,66 @@ func (m *mockBackendSession) Close() error {
 	}
 
 	return nil
+}
+
+type twoNodeNet struct {
+	n1, n2 *Netceptor
+	b1, b2 *ExternalBackend
+}
+
+func createTwoNodeNet(t *testing.T, lw *logWriter) *twoNodeNet {
+	t.Helper()
+	n1 := New(context.Background(), "node1")
+	n1.Logger.SetOutput(lw)
+	n1.Logger.SetShowTrace(true)
+	b1, err := NewExternalBackend()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = n1.AddBackend(b1); err != nil {
+		t.Fatal(err)
+	}
+	n2 := New(context.Background(), "node2")
+	n2.Logger.SetOutput(lw)
+	n2.Logger.SetShowTrace(true)
+	b2, err := NewExternalBackend()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = n2.AddBackend(b2); err != nil {
+		t.Fatal(err)
+	}
+	return &twoNodeNet{n1: n1, n2: n2, b1: b1, b2: b2}
+}
+
+func connectAndWaitForRouting(t *testing.T, net *twoNodeNet) context.Context {
+	t.Helper()
+	c1, c2, err := socketpair.New("unix")
+	if err != nil {
+		t.Fatal(err)
+	}
+	nCh1 := net.n1.SubscribeRoutingUpdates()
+	nCh2 := net.n2.SubscribeRoutingUpdates()
+	net.b1.NewConnection(MessageConnFromNetConn(c1), true)
+	net.b2.NewConnection(MessageConnFromNetConn(c2), true)
+
+	var routes1, routes2 map[string]string
+	timeout, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	t.Cleanup(cancel)
+	for {
+		select {
+		case <-timeout.Done():
+			t.Fatal("timed out waiting for nodes to connect")
+		case routes1 = <-nCh1:
+		case routes2 = <-nCh2:
+		}
+		if routes1 != nil && routes2 != nil {
+			if _, ok := routes1["node2"]; ok {
+				if _, ok := routes2["node1"]; ok {
+					break
+				}
+			}
+		}
+	}
+	return timeout
 }

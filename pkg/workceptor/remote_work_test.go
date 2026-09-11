@@ -21,9 +21,18 @@ import (
 	"go.uber.org/mock/gomock"
 )
 
+// remoteWorkSetupParams groups the mock infrastructure parameters for createRemoteWorkNetworkSetup.
+type remoteWorkSetupParams struct {
+	MockNetceptor    *mock_workceptor.MockNetceptorForWorkceptor
+	MockBaseWorkUnit *mock_workceptor.MockBaseWorkUnitForWorkUnit
+	TmpDir           string
+	RemoteExtraData  *workceptor.RemoteExtraData
+	Anytimes         bool
+}
+
 // createRemoteWorkNetworkSetup creates a mock network Conn for testing remote work operations.
 // It takes a list of messages to be sent to the mock Conn and sets up the mock netceptor and base work unit expectations.
-func createRemoteWorkNetworkSetup(t *testing.T, ctrl *gomock.Controller, ctx context.Context, messages []string, mockNetceptor *mock_workceptor.MockNetceptorForWorkceptor, mockBaseWorkUnit *mock_workceptor.MockBaseWorkUnitForWorkUnit, tmpDir string, remoteExtraData *workceptor.RemoteExtraData, anytimes bool) {
+func createRemoteWorkNetworkSetup(t *testing.T, ctrl *gomock.Controller, ctx context.Context, messages []string, params remoteWorkSetupParams) {
 	t.Helper()
 
 	// Create a mock Conn using the mock interfaces
@@ -44,7 +53,7 @@ func createRemoteWorkNetworkSetup(t *testing.T, ctrl *gomock.Controller, ctx con
 
 		return 0, ctx.Err()
 	})
-	if anytimes {
+	if params.Anytimes {
 		readExpectation.AnyTimes()
 	} else {
 		readExpectation.Times(len(messages))
@@ -76,30 +85,30 @@ func createRemoteWorkNetworkSetup(t *testing.T, ctrl *gomock.Controller, ctx con
 	)
 
 	// Set up mock netceptor expectations
-	mockNetceptor.EXPECT().GetClientTLSConfig(gomock.Any(), gomock.Any(), gomock.Any()).Return(&tls.Config{}, nil).AnyTimes()
-	mockNetceptor.EXPECT().DialContext(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(mockConn, nil).AnyTimes()
+	params.MockNetceptor.EXPECT().GetClientTLSConfig(gomock.Any(), gomock.Any(), gomock.Any()).Return(&tls.Config{}, nil).AnyTimes()
+	params.MockNetceptor.EXPECT().DialContext(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(mockConn, nil).AnyTimes()
 
 	// Set up common mock base work unit expectations
-	mockBaseWorkUnit.EXPECT().Load().Return(nil).AnyTimes()
-	mockBaseWorkUnit.EXPECT().StdoutFileName().Return(filepath.Join(tmpDir, "stdout")).AnyTimes()
-	mockBaseWorkUnit.EXPECT().UnitDir().Return(tmpDir).AnyTimes()
-	mockBaseWorkUnit.EXPECT().UpdateFullStatus(gomock.Any()).Do(func(updateFunc interface{}) {
+	params.MockBaseWorkUnit.EXPECT().Load().Return(nil).AnyTimes()
+	params.MockBaseWorkUnit.EXPECT().StdoutFileName().Return(filepath.Join(params.TmpDir, "stdout")).AnyTimes()
+	params.MockBaseWorkUnit.EXPECT().UnitDir().Return(params.TmpDir).AnyTimes()
+	params.MockBaseWorkUnit.EXPECT().UpdateFullStatus(gomock.Any()).Do(func(updateFunc interface{}) {
 		updateFunc.(func(*workceptor.StatusFileData))(&workceptor.StatusFileData{
-			ExtraData: remoteExtraData,
+			ExtraData: params.RemoteExtraData,
 		})
 	}).AnyTimes()
-	mockBaseWorkUnit.EXPECT().UpdateBasicStatus(gomock.Any(), gomock.Any(), gomock.Any()).AnyTimes()
-	mockBaseWorkUnit.EXPECT().LastUpdateError().Return(nil).AnyTimes()
+	params.MockBaseWorkUnit.EXPECT().UpdateBasicStatus(gomock.Any(), gomock.Any(), gomock.Any()).AnyTimes()
+	params.MockBaseWorkUnit.EXPECT().LastUpdateError().Return(nil).AnyTimes()
 
 	// Create temporary directory and stdin file
-	_ = os.MkdirAll(tmpDir, 0o755)
-	stdinFile, err := os.Create(filepath.Join(tmpDir, "stdin"))
+	_ = os.MkdirAll(params.TmpDir, 0o755)
+	stdinFile, err := os.Create(filepath.Join(params.TmpDir, "stdin"))
 	if err != nil {
 		t.Errorf("Error creating temporary file: %v", err)
 	} else {
 		stdinFile.Close()
 		t.Cleanup(func() {
-			os.Remove(filepath.Join(tmpDir, "stdin"))
+			os.Remove(filepath.Join(params.TmpDir, "stdin"))
 		})
 	}
 }
@@ -397,7 +406,13 @@ func TestRemoteWorkLifecycleOperations(t *testing.T) {
 					"{\"State\": 1, \"Detail\": \"Running\", \"StdoutSize\": 0}\n", // Status updates for monitoring
 				}
 				anyTimes := true // Needed because this will monitor the remote work unit in a loop
-				createRemoteWorkNetworkSetup(t, ctrl, contextWithCancel, messages, mockNetceptor, mockBaseWorkUnit, tmpDir, remoteExtraData, anyTimes)
+				createRemoteWorkNetworkSetup(t, ctrl, contextWithCancel, messages, remoteWorkSetupParams{
+					MockNetceptor:    mockNetceptor,
+					MockBaseWorkUnit: mockBaseWorkUnit,
+					TmpDir:           tmpDir,
+					RemoteExtraData:  remoteExtraData,
+					Anytimes:         anyTimes,
+				})
 				err = wu.Start()
 			case "start_already_started":
 				err = wu.Start()
@@ -409,7 +424,13 @@ func TestRemoteWorkLifecycleOperations(t *testing.T) {
 					"{\"State\": 1, \"Detail\": \"Running\", \"StdoutSize\": 0}\n", // Response to status command
 				}
 				anyTimes := true // Needed because this will monitor the remote work unit in a loop
-				createRemoteWorkNetworkSetup(t, ctrl, contextWithCancel, messages, mockNetceptor, mockBaseWorkUnit, tmpDir, remoteExtraData, anyTimes)
+				createRemoteWorkNetworkSetup(t, ctrl, contextWithCancel, messages, remoteWorkSetupParams{
+					MockNetceptor:    mockNetceptor,
+					MockBaseWorkUnit: mockBaseWorkUnit,
+					TmpDir:           tmpDir,
+					RemoteExtraData:  remoteExtraData,
+					Anytimes:         anyTimes,
+				})
 				err = wu.Restart()
 			case "restart_local_released":
 				remoteExtraData.LocalReleased = true
@@ -426,7 +447,13 @@ func TestRemoteWorkLifecycleOperations(t *testing.T) {
 					"{\"State\": 4, \"Detail\": \"Cancelled\", \"StdoutSize\": 0}\n", // Response to cancel command
 				}
 				anyTimes := true
-				createRemoteWorkNetworkSetup(t, ctrl, contextWithCancel, messages, mockNetceptor, mockBaseWorkUnit, tmpDir, remoteExtraData, anyTimes)
+				createRemoteWorkNetworkSetup(t, ctrl, contextWithCancel, messages, remoteWorkSetupParams{
+					MockNetceptor:    mockNetceptor,
+					MockBaseWorkUnit: mockBaseWorkUnit,
+					TmpDir:           tmpDir,
+					RemoteExtraData:  remoteExtraData,
+					Anytimes:         anyTimes,
+				})
 				// Note: We do NOT expect mockBaseWorkUnit.Release() to be called.
 				// If Release() were called, gomock would fail with an unexpected call error.
 				err = wu.Restart()
@@ -436,7 +463,13 @@ func TestRemoteWorkLifecycleOperations(t *testing.T) {
 					"ERROR: unknown work unit\n",
 				}
 				anyTimes := true // Needed because this will monitor the remote work unit in a loop
-				createRemoteWorkNetworkSetup(t, ctrl, contextWithCancel, messages, mockNetceptor, mockBaseWorkUnit, tmpDir, remoteExtraData, anyTimes)
+				createRemoteWorkNetworkSetup(t, ctrl, contextWithCancel, messages, remoteWorkSetupParams{
+					MockNetceptor:    mockNetceptor,
+					MockBaseWorkUnit: mockBaseWorkUnit,
+					TmpDir:           tmpDir,
+					RemoteExtraData:  remoteExtraData,
+					Anytimes:         anyTimes,
+				})
 				err = wu.Restart()
 			case "cancel_not_started":
 				mockBaseWorkUnit.EXPECT().UpdateBasicStatus(workceptor.WorkStateFailed, "Locally Cancelled", int64(0))
@@ -447,7 +480,13 @@ func TestRemoteWorkLifecycleOperations(t *testing.T) {
 					"{\"State\": 4, \"Detail\": \"Cancelled\", \"StdoutSize\": 0}\n", // Acknowledgment to release command
 				}
 				anyTimes := true // Needed because this will monitor the remote work unit in a loop
-				createRemoteWorkNetworkSetup(t, ctrl, contextWithCancel, messages, mockNetceptor, mockBaseWorkUnit, tmpDir, remoteExtraData, anyTimes)
+				createRemoteWorkNetworkSetup(t, ctrl, contextWithCancel, messages, remoteWorkSetupParams{
+					MockNetceptor:    mockNetceptor,
+					MockBaseWorkUnit: mockBaseWorkUnit,
+					TmpDir:           tmpDir,
+					RemoteExtraData:  remoteExtraData,
+					Anytimes:         anyTimes,
+				})
 				err = wu.Cancel()
 			case "release_not_started":
 				mockBaseWorkUnit.EXPECT().Release(true).Return(nil)
@@ -457,7 +496,13 @@ func TestRemoteWorkLifecycleOperations(t *testing.T) {
 					"execution\n", // Hello message with remote node ID
 					"{\"State\": 4, \"Detail\": \"Cancelled\", \"StdoutSize\": 0}\n", // Acknowledgment to release command
 				}
-				createRemoteWorkNetworkSetup(t, ctrl, contextWithCancel, messages, mockNetceptor, mockBaseWorkUnit, tmpDir, remoteExtraData, false)
+				createRemoteWorkNetworkSetup(t, ctrl, contextWithCancel, messages, remoteWorkSetupParams{
+					MockNetceptor:    mockNetceptor,
+					MockBaseWorkUnit: mockBaseWorkUnit,
+					TmpDir:           tmpDir,
+					RemoteExtraData:  remoteExtraData,
+					Anytimes:         false,
+				})
 				mockBaseWorkUnit.EXPECT().Release(false).Return(nil)
 				err = wu.Release(false)
 			case "force_release_already_started":
@@ -466,7 +511,13 @@ func TestRemoteWorkLifecycleOperations(t *testing.T) {
 					"{\"State\": 4, \"Detail\": \"Cancelled\", \"StdoutSize\": 0}\n", // Acknowledgment to release command
 				}
 				anyTimes := true // Needed because this will monitor the remote work unit in a loop
-				createRemoteWorkNetworkSetup(t, ctrl, contextWithCancel, messages, mockNetceptor, mockBaseWorkUnit, tmpDir, remoteExtraData, anyTimes)
+				createRemoteWorkNetworkSetup(t, ctrl, contextWithCancel, messages, remoteWorkSetupParams{
+					MockNetceptor:    mockNetceptor,
+					MockBaseWorkUnit: mockBaseWorkUnit,
+					TmpDir:           tmpDir,
+					RemoteExtraData:  remoteExtraData,
+					Anytimes:         anyTimes,
+				})
 				mockBaseWorkUnit.EXPECT().Release(true).Return(nil)
 				err = wu.Release(true)
 			default:

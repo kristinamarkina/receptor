@@ -251,11 +251,7 @@ func (pc *PacketConn) Close() error {
 
 // SetDeadline sets both the read and write deadlines.
 func (pc *PacketConn) SetDeadline(t time.Time) error {
-	pc.readDeadlineMutex.Lock()
-	pc.readDeadline = t
-	pc.readDeadlineMutex.Unlock()
-
-	return nil
+	return pc.SetReadDeadline(t)
 }
 
 // SetReadDeadline sets the read deadline.
